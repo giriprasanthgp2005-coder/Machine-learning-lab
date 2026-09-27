@@ -1,0 +1,230 @@
+import streamlit as st
+import numpy as np
+import cv2
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.datasets import load_digits
+from sklearn.model_selection import train_test_split
+from sklearn.neural_network import MLPClassifier
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
+
+# ----------------- PAGE CONFIGURATION -----------------
+st.set_page_config(
+    page_title="ML Pipeline Dashboard",
+    page_icon="🔬",
+    layout="wide"
+)
+
+st.title("🔬 End-to-End Machine Learning Image Classification Pipeline")
+st.write("An integrated web interface demonstrating the complete Machine Learning workflow in one frame.")
+
+# ----------------- SESSION STATE MANAGEMENT -----------------
+if "dataset_loaded" not in st.session_state:
+    st.session_state.dataset_loaded = False
+if "model_trained" not in st.session_state:
+    st.session_state.model_trained = False
+if "input_img" not in st.session_state:
+    st.session_state.input_img = None
+if "preprocessed_img" not in st.session_state:
+    st.session_state.preprocessed_img = None
+if "features" not in st.session_state:
+    st.session_state.features = None
+
+# ----------------- 5-STAGE NAVIGATION TABS -----------------
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    "1. 📥 Load Image", 
+    "2. ⚙️ Preprocessing", 
+    "3. 🧬 Feature Extraction", 
+    "4. 🧠 Model Training", 
+    "5. 📊 Evaluation & Prediction"
+])
+
+# ==============================================================
+# STAGE 1: LOAD INPUT IMAGE
+# ==============================================================
+with tab1:
+    st.header("Step 1: Load Input Image")
+    st.write("Upload a handwritten digit sample image or load an instant benchmark sample.")
+
+    col1, col2 = st.columns([1, 1])
+    with col1:
+        uploaded_file = st.file_uploader("Upload an image (PNG, JPG, JPEG):", type=["png", "jpg", "jpeg"])
+        if uploaded_file is not None:
+            file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
+            st.session_state.input_img = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+
+        st.write("— OR —")
+        if st.button("📁 Load Benchmark Sample (Digit '3')", use_container_width=True):
+            digits = load_digits()
+            sample = (digits.images[3] * 16).astype(np.uint8)
+            # Upscale for clear display
+            sample_resized = cv2.resize(sample, (128, 128), interpolation=cv2.INTER_NEAREST)
+            st.session_state.input_img = cv2.cvtColor(sample_resized, cv2.COLOR_GRAY2BGR)
+
+    with col2:
+        if st.session_state.input_img is not None:
+            st.image(st.session_state.input_img, caption="Input Image Preview", width=220)
+            st.success("✅ Image loaded successfully into pipeline buffer.")
+        else:
+            st.info("Please upload or select a benchmark sample to proceed.")
+
+# ==============================================================
+# STAGE 2: PREPROCESSING
+# ==============================================================
+with tab2:
+    st.header("Step 2: Image Preprocessing")
+    st.write("Apply grayscale conversion, spatial smoothing, and dimension normalization.")
+
+    if st.session_state.input_img is not None:
+        col_pre1, col_pre2 = st.columns(2)
+        with col_pre1:
+            st.image(st.session_state.input_img, caption="Original Input", width=200)
+
+        with col_pre2:
+            if st.button("⚙️ Execute Preprocessing Pipeline", type="primary"):
+                # 1. Grayscale conversion
+                gray = cv2.cvtColor(st.session_state.input_img, cv2.COLOR_BGR2GRAY)
+                # 2. Gaussian noise reduction
+                blurred = cv2.GaussianBlur(gray, (3, 3), 0)
+                # 3. Standardization to 28x28
+                resized = cv2.resize(blurred, (28, 28), interpolation=cv2.INTER_AREA)
+                # 4. Inversion check (ensure white strokes on dark background)
+                if np.mean(resized) > 127:
+                    resized = cv2.bitwise_not(resized)
+                
+                st.session_state.preprocessed_img = resized
+                st.image(st.session_state.preprocessed_img, caption="Preprocessed & Normalized (28×28)", width=200)
+                st.success("✅ Grayscale conversion, Gaussian filtering, and 28×28 spatial alignment completed.")
+            elif st.session_state.preprocessed_img is not None:
+                st.image(st.session_state.preprocessed_img, caption="Preprocessed & Normalized (28×28)", width=200)
+    else:
+        st.warning("⚠️ Complete Step 1 (Load Image) first.")
+
+# ==============================================================
+# STAGE 3: FEATURE EXTRACTION
+# ==============================================================
+with tab3:
+    st.header("Step 3: Feature Extraction")
+    st.write("Transform raw spatial pixel matrices into normalized, high-density machine learning descriptors.")
+
+    if st.session_state.preprocessed_img is not None:
+        if st.button("🧬 Extract Feature Vector", type="primary"):
+            # Min-Max Normalization to [0.0, 1.0] and vector flattening (1x784)
+            norm_vector = (st.session_state.preprocessed_img.astype(np.float32) / 255.0).flatten()
+            st.session_state.features = norm_vector
+
+        if st.session_state.features is not None:
+            st.markdown(f"**Extracted Feature Vector Dimensions:** `{len(st.session_state.features)} Features (784-Dimensional Array)`")
+            st.markdown(f"**Numerical Feature Sample (First 15 values):**")
+            st.code(str(np.round(st.session_state.features[:15], 4).tolist()))
+
+            st.write("**Feature Vector Intensity Spectrum:**")
+            fig_feat, ax_feat = plt.subplots(figsize=(10, 2))
+            ax_feat.plot(st.session_state.features, color="#00bcd4", lw=1)
+            ax_feat.set_xlabel("Feature Index (0 to 783)")
+            ax_feat.set_ylabel("Normalized Intensity")
+            st.pyplot(fig_feat)
+            st.success("✅ Extracted 784 numerical feature descriptors.")
+    else:
+        st.warning("⚠️ Complete Step 2 (Preprocessing) first.")
+
+# ==============================================================
+# STAGE 4: MODEL TRAINING
+# ==============================================================
+with tab4:
+    st.header("Step 4: Neural Network Training")
+    st.write("Train a Multi-Layer Perceptron (MLP) Classifier using Backpropagation and Adam optimization.")
+
+    col_t1, col_t2 = st.columns([1, 2])
+    with col_t1:
+        st.subheader("Training Parameters")
+        epochs = st.slider("Maximum Iterations (Epochs):", min_value=10, max_value=60, value=30, step=5)
+        hidden_nodes = st.selectbox("Hidden Layer Topology:", ["(64, 32)", "(128, 64)"])
+        train_btn = st.button("🚀 Train Neural Network", type="primary", use_container_width=True)
+
+    with col_t2:
+        if train_btn:
+            with st.spinner("Training MLP Classifier on MNIST benchmark subset..."):
+                digits_data = load_digits()
+                # Upscale 8x8 digits to 28x28 to match full vision pipeline
+                X_raw = np.array([cv2.resize(img, (28, 28), interpolation=cv2.INTER_AREA).flatten() for img in digits_data.images])
+                X = X_raw / 16.0
+                y = digits_data.target
+
+                X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=42, stratify=y)
+                
+                layers = (64, 32) if hidden_nodes == "(64, 32)" else (128, 64)
+                mlp = MLPClassifier(hidden_layer_sizes=layers, max_iter=epochs, random_state=42, activation="relu", solver="adam")
+                mlp.fit(X_train, y_train)
+
+                st.session_state.model = mlp
+                st.session_state.X_test = X_test
+                st.session_state.y_test = y_test
+                st.session_state.model_trained = True
+
+                st.success("✅ Training completed! Model weights are active in memory.")
+                
+                # Plot training loss curve
+                fig_loss, ax_loss = plt.subplots(figsize=(6, 3))
+                ax_loss.plot(mlp.loss_curve_, marker="o", color="#e91e63", label="Training Loss")
+                ax_loss.set_title("Training Loss Convergence Curve")
+                ax_loss.set_xlabel("Epoch / Iteration")
+                ax_loss.set_ylabel("Loss")
+                ax_loss.grid(True, linestyle="--", alpha=0.5)
+                st.pyplot(fig_loss)
+        elif st.session_state.model_trained:
+            st.info("Current model is fully trained and ready for evaluation.")
+
+# ==============================================================
+# STAGE 5: EVALUATION & PREDICTION
+# ==============================================================
+with tab5:
+    st.header("Step 5: Performance Evaluation & Inference")
+
+    if st.session_state.model_trained:
+        st.subheader("1. Unseen Test Set Performance Metrics")
+        
+        y_pred = st.session_state.model.predict(st.session_state.X_test)
+        acc = accuracy_score(st.session_state.y_test, y_pred) * 100
+        prec = precision_score(st.session_state.y_test, y_pred, average="weighted") * 100
+        rec = recall_score(st.session_state.y_test, y_pred, average="weighted") * 100
+        f1 = f1_score(st.session_state.y_test, y_pred, average="weighted") * 100
+
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Accuracy", f"{acc:.2f}%")
+        m2.metric("Precision", f"{prec:.2f}%")
+        m3.metric("Recall", f"{rec:.2f}%")
+        m4.metric("F1-Score", f"{f1:.2f}%")
+
+        col_cm, col_pred = st.columns([1.2, 1])
+
+        with col_cm:
+            st.write("**Confusion Matrix Heatmap:**")
+            cm = confusion_matrix(st.session_state.y_test, y_pred)
+            fig_cm, ax_cm = plt.subplots(figsize=(6, 4.5))
+            sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", ax=ax_cm, cbar=False)
+            ax_cm.set_xlabel("Predicted Class")
+            ax_cm.set_ylabel("True Class")
+            st.pyplot(fig_cm)
+
+        with col_pred:
+            st.write("**Inference on Current Preprocessed Image:**")
+            if st.session_state.features is not None:
+                feat_input = st.session_state.features.reshape(1, -1)
+                probs = st.session_state.model.predict_proba(feat_input)[0]
+                prediction = int(np.argmax(probs))
+                confidence = float(np.max(probs) * 100)
+
+                st.success(f"### Predicted Class: **Digit {prediction}**")
+                st.metric("Model Confidence", f"{confidence:.2f}%")
+
+                prob_df = pd.DataFrame({
+                    "Class": [f"Digit {i}" for i in range(10)],
+                    "Probability (%)": [p * 100 for p in probs]
+                }).set_index("Class")
+                st.bar_chart(prob_df)
+            else:
+                st.info("Execute Step 3 (Feature Extraction) on an image to test real-time classification.")
+    else:
+        st.warning("⚠️ Complete Step 4 (Train Neural Network) first.")
